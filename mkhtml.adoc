@@ -1,0 +1,171 @@
+= mkhtml(1)
+:manmanual: General Commands Manual
+:mansource: mkhtml {VERSION}
+
+== Name
+
+mkhtml - Generate HTML5 documents with Asciidocor or Mistletoe
+
+== Synopsis
+
+[verse]
+*mkhtml* [*-h*] [*-d* __path__] [*-f* __format__] [*-o* __file__]
+       [__asciidoctor-flags__] [__mistletoe-flags__] [__source__]
+
+== Description
+
+*mkhtml* generates HTML5 documents using Asciidoctor or Mistletoe for Asciidoc
+or Markdown input, respectively.
+
+=== Preamble
+
+Document attributes may be set in the preamble at the start of the document to
+affect processing. The format of the attributes block differs slightly between
+the Asciidoc and Markdown formats. Document attributes are natively supported
+by the Asciidoc format, so *mkhtml* looks in the usual place:
+
+.Asciidoc
+[source,subs="specialchars,quotes"]
+----
+*=* _title_
+**:**__name__**:** [__value__]
+[__...__]
+----
+
+Markdown does not natively support document attributes like this, so *mkhtml*
+will search for an initial comment and will look there for attributes. Note
+that this may not be a single-line comment and the opening and closing tags
+must be on their own lines:
+
+.Markdown
+[source,subs="specialchars,quotes"]
+----
+*<!--*
+**:**__name__**:** [__value__]
+[__...__]
+*-->*
+*#* _title_
+----
+
+*mkhtml* currently looks for only four attributes: *head*, *header*, *footer*,
+and *lang*. The first three determine the include files that will be used while
+the fourth will be copied into the *lang* attribute of the root HTML element if
+it is set.
+
+== Options
+
+*-d* _path_::
+	Add _path_ to the list of directories to check for include files. This
+	option may be specified more than once.
+
+*-h*::
+	Display a help message describing the command line options.
+
+*-f* _format_::
+	Process _source_ as _format_, where acceptable values for _format_ are
+	*asciidoc* and *markdown*. The default format is *asciidoc*.
+
+*-o* _file_::
+	Write output to _file_. If _file_ is *-*, then write output to
+	**stdout**(3).
+
+=== Asciidoctor Options
+
+*-I* _path_::
+	Add _path_ to the Ruby load path. This option may be specified more than
+	once.
+
+*-S* _mode_::
+	Set safe mode level. Acceptable values are *unsafe*, *safe*, *server*, and
+	*secure*. See **asciidoctor**(1) for the meaning of these values.
+
+*-T*::
+	Enable the *--trace* option.
+
+*-a* _attribute_, *-a* __attribute__**=**__value__::
+	Define, override, or unset a document attribute.
+
+*-b* _backend_::
+	Set output format to _backend_.
+
+*-n*::
+	Enable section numbering.
+
+*-q*::
+	Silence messages and warnings.
+
+*-r* _library_::
+	Require _library_ before executing the processor via a standard Ruby
+	*require*.
+
+*-t*::
+	Print timing report.
+
+*-v*::
+	Enable verbose output.
+
+*-w*::
+	Enable script warnings.
+
+=== Mistletoe Options
+
+*-r* _renderer_::
+	Use an importable _renderer_ class.
+
+== Exit Status
+
+*0*::
+	Success.
+
+*1*::
+	Failure. Either there is an error on the *mkhtml* command line, the
+	document processor failed in some way, or *mkhtml* was unable to write to
+	the output file. Both *mkhtml* and the relevant document processor should
+	produce an error message.
+
+== Environment
+
+*ASCIIDOC*::
+	Command for the *asciidoctor* Asciidoc processor.
+
+*MISTLETOE*::
+	Command for the *mistletoe* Markdown processor.
+
+*MKHTML_DATA_PATH*::
+	A **PATH**-like variable containing a colon-separated list of directories
+	in which *mkhtml* should look for include files.
+
+== Files
+
+*head*[**-**__name__][*.html*|*/*]::
+	Included in the document HEAD.
+
+*header*[**-**__name__][*.html*|*/*]::
+	Included before the generated body fragment.
+
+*footer*[**-**__name__][*.html*|*/*]::
+	Included after the generated body fragment.
+
+*mkhtml* searches for include files in *MKHTML_DATA_PATH*. Each include may be
+a regular file containing a HTML fragment, in which case the content is
+directly included, or a directory. If a directory, all files within that
+directory are included in lexicographic order. It is therefore recommended to
+name them as __number__**-**__name__**.html** to ensure correct ordering.
+
+The exact include files used may be changed by setting the *head*, *header*,
+and *footer* document attributes. If a boolean value is specified, then either
+the default file (_ie._ The one without a __name__ component.) will be included
+if it evaluates true or nothing will be included if it evaluates false. Any
+other value will be used as the __name__ component. For example, if *head* is
+set to *custom*, then *mkhtml* will search the directories in
+*MKHTML_DATA_PATH* for a regular file named *head-custom.html* or a directory
+named *head-custom*.
+
+Include files are optional, but creating a *head.html* is strongly recommended
+as only a title tag is included by default. *mkhtml* will print a warning
+message if one does not exist. This message may be silenced by setting the
+*head* document attribute to one of the false values: *0*, *n*, or *no*.
+
+== See Also
+
+**asciidoctor**(1)

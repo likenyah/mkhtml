@@ -1,0 +1,5 @@
+*.adoc diff=asciidoc
+*.md diff=markdown
+
+mkhtml diff=bash
+scripts/atomic-install diff=bash

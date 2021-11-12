@@ -1,0 +1,95 @@
+#! /usr/bin/env sh
+# This script is based on Rich Felker's install.sh from musl libc and is
+# considered public domain.
+# -----------------------------------------------------------------------------
+
+set -e
+
+atomic_install_help="\
+usage: ${0##*/} [-Dh] [-m <mode>] <src> <dst>
+
+Install <src> atomically to <dst>.
+
+Options:
+ -D           Create all parent directories.
+ -h           Print this help text.
+ -l           Install as a symbolic link.
+ -m <mode>    Use file mode <mode> for <dst>. Default: 0755
+"
+
+fatal()
+{
+	_fatal_fmt="${1}"
+	shift
+
+	# shellcheck disable=SC2059
+	printf "fatal: ${_fatal_fmt}\\n" "${@}" >&2
+	exit 1
+}
+
+mkdirp="n"
+mode="0755"
+symlink="n"
+
+while getopts ":Dlhm:" opt; do
+	case "${opt}" in
+	D)
+		mkdirp="y"
+		;;
+	h)
+		printf "%s" "${atomic_install_help}" >&2
+		exit 0
+		;;
+	l)
+		symlink="y"
+		;;
+	m)
+		if ! printf "%s\\n" "${OPTARG}" | grep -E -q '^[0-7]{1,4}$'; then
+			fatal "invalid mode: %s" "${OPTARG}"
+		fi
+
+		mode="${OPTARG}"
+		;;
+	:)
+		fatal "option requires argument: -%s" "${OPTARG}"
+		;;
+	*)
+		fatal "unknown option: -%s" "${OPTARG}"
+		;;
+	esac
+done
+shift $((OPTIND - 1))
+
+if [ "${#}" -ne 2 ]; then
+	fatal "expected arguments: <src> <dst>"
+fi
+
+src="${1}"
+dst="${2}"
+tmp="${dst}.tmp.${$}"
+
+if [ -z "${dst##*/}" ]; then
+	fatal "<dst> ends with '/': %s" "${dst}"
+fi
+
+if [ "${mkdirp}" = "y" ] && [ -n "${dst%/*}" ]; then
+	umask 022
+	mkdir -p "${dst%/*}"
+fi
+
+set -C
+umask 077
+trap 'rm -rf "${tmp}"' EXIT HUP INT QUIT TERM
+
+if [ "${symlink}" = "y" ]; then
+	ln -s "${src}" "${tmp}"
+else
+	cp "${src}" "${tmp}"
+	chmod "${mode}" "${tmp}"
+fi
+
+if [ -d "${dst}" ]; then
+	fatal "<dst> is a directory: %s" "${dst}"
+fi
+
+mv -f "${tmp}" "${dst}"

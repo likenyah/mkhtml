@@ -1,0 +1,473 @@
+#! /usr/bin/env sh
+# SPDX-License-Identifier: 0BSD
+#
+# Copyright © 2021 Alex Minghella <a@minghella.net>
+#
+# Permission to use, copy, modify, and/or distribute this software for any
+# purpose with or without fee is hereby granted.
+#
+# THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+# WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+# MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+# ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+# WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+# ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+# OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+# -----------------------------------------------------------------------------
+
+: "${ASCIIDOC:="asciidoctor"}"
+: "${MISTLETOE:="mistletoe"}"
+: "${MKHTML_DATA_PATH:="${PWD}"}"
+
+MKHTML_TMPDIR="$(mktemp -d -p "${TMPDIR:-"/tmp"}")"
+trap 'rm -rf "${MKHTML_TMPDIR}"' EXIT
+
+mkhtml_help="\
+usage: ${0##*/} [-h] [-d <path>] [-f <format>] [-o <file>]
+       [<asciidoctor-option>]... [<mistletoe-option>]... [<source>]
+
+Options:
+ -d <path>         Add <path> to the list of directories to check for include
+                   files. This option may be specified more than once.
+ -h                Display this help message.
+ -f <format>       Process <source> as <format>, where acceptable values for
+                   <format> are 'asciidoc' and 'markdown'.
+ -o <file>         Write output to <file>. If <file> is '-', then write output
+                   to stdout(3).
+
+Asciidoctor Options:
+ -I <path>         Add <path> to the Ruby load path. This option may be
+                   specified more than once.
+ -S <mode>         Set safe mode level. Acceptable values are 'unsafe', 'safe',
+                   'server', and 'secure'.
+ -T                Enable --trace.
+ -a <attribute>    Define, override, or unset a document attribute.
+ -b <backend>      Set output format to <backend>.
+ -n                Enable section numbering.
+ -q                Silence messages and warnings.
+ -r <library>      Require <library> before executing the processor via a
+                   standard Ruby require.
+ -t                Print timing report.
+ -v                Enable verbose output.
+ -w                Enable script warnings.
+
+Mistletoe Options:
+ -r <renderer>     Use an importable <renderer> class.
+"
+
+fatal()
+{
+	_fatal_fmt="${1}"
+	shift
+
+	# shellcheck disable=SC2059
+	printf "fatal: ${_fatal_fmt}\\n" "${@}" >&2
+	wait
+	exit 1
+}
+
+error()
+{
+	_error_fmt="${1}"
+	shift
+
+	# shellcheck disable=SC2059
+	printf "error: ${_error_fmt}\\n" "${@}" >&2
+}
+
+checkyn()
+{
+	case "${1}" in
+	[Yy1]|[Yy][Ee][Ss])
+		return 0
+		;;
+	[Nn0]|[Nn][Oo])
+		return 1
+		;;
+	*)
+		return 2
+		;;
+	esac
+}
+
+shquote()
+{
+	printf "%s\\n" "${1}" | sed "s/'/'\\\\''/g; 1s/^/'/; \$s/\$/'/"
+}
+
+requote()
+{
+	printf "%s\\n" "${1}" | sed 's/[][)(}{^$+.\;\/\\]/\\&/g;'
+}
+
+exec_processor()
+{
+	_exec_processor_source="${1}"
+	_exec_processor_output="${2}"
+
+	case "${format}" in
+	asciidoc)
+		eval "set -- ${asciidoctor_flags}"
+		${ASCIIDOC} -b "${processor_backend}" "${@}" -s \
+			-o "${_exec_processor_output}" \
+			"${_exec_processor_source}" &
+		;;
+	markdown)
+		_exec_processor_tmp="$(mktemp -p "${MKHTML_TMPDIR}")"
+
+		# Stip the preamble before feeding the document to Mistlete,
+		# otherwise it bleeds into the generated HTML document.
+		sed -E '
+			1 {
+				: top
+
+				/^[[:space:]]*$/ {
+					s/.*//
+					N
+					s/\n//
+					b top
+				}
+
+				/^<!--/ {
+					: again
+					t again
+					s/.*//
+					N
+					s/\n//
+					/-->$/d
+					t again
+				}
+			}' \
+			<"${_exec_processor_source}" \
+			>"${_exec_processor_tmp}"
+
+		eval "set -- ${mistletoe_flags}"
+		${MISTLETOE} "${@}" \
+			"${_exec_processor_tmp}" \
+			>"${_exec_processor_output}" &
+		;;
+	esac
+}
+
+attr_get_adoc()
+{
+	if [ "${1}" = "title" ]; then
+		sed -En '
+			/^[[:space:]]*(\/\/.*)?$/d
+
+			/^=[[:space:]]/ {
+				s/^=[[:space:]]*//
+				s/&/\&amp;/g
+				s/'\''/\&#39;/g
+				s/</\&lt;/g
+				s/>/\&gt;/g
+				s/`//g
+				p
+			}
+
+			q' <"${2}"
+	else
+		sed -En "
+			/^[[:space:]]*(\/\/.*)?$/d
+			/^=[[:space:]]/d
+
+			: fold
+			/\\\\$/ {
+				N
+				s/\\\\\\n[[:space:]]*//
+				t fold
+			}
+
+			s/^[[:space:]]*//
+
+			/^:$(requote "${1}"):[[:space:]]*/ {
+				s/^:[[:alnum:]_]+:[[:space:]]*//
+				p
+				q
+			}
+
+			/^[^:]/ {
+				q
+			}
+		" <"${2}"
+	fi
+}
+
+attr_get_mkdn()
+{
+	if [ "${1}" = "title" ]; then
+		sed -En '
+			/^[[:space:]]*$/d
+
+			/^<!--/ {
+				: again
+				t again
+				s/.*//
+				N
+				s/\n//
+				/-->$/d
+				t again
+			}
+
+			/^#[[:space:]]/ {
+				s/^#[[:space:]]*//
+				s/&/\&amp;/g
+				s/'\''/\&#39;/g
+				s/</\&lt;/g
+				s/>/\&gt;/g
+				s/`//g
+				p
+			}
+
+			q
+			' <"${2}"
+	else
+		sed -En "
+			/^[[:space:]]*$/d
+
+			/^<!--/ {
+				: again
+				s/.*//
+				N
+				s/\n//
+
+				/-->$/ {
+					q
+				}
+
+				: fold
+				/\\\\$/ {
+					N
+					s/\\\\\\n[[:space:]]*//
+					t fold
+				}
+
+				s/^[[:space:]]*//
+
+				/^:$(requote "${1}"):[[:space:]]*/ {
+					s/^:[[:alnum:]_]+:[[:space:]]*//
+					p
+					q
+				}
+
+				b again
+			}
+
+			q
+			" <"${2}"
+	fi
+}
+
+attr_get()
+{
+	case "${format}" in
+	asciidoc)
+		attr_get_adoc "${@}"
+		;;
+	markdown)
+		attr_get_mkdn "${@}"
+		;;
+	esac
+}
+
+include_get()
+{
+	if [ -z "${MKHTML_DATA_PATH}" ]; then
+		return 2
+	fi
+
+	_include_get_filename="${1}"
+
+	eval "set -- '$(printf "%s\\n" "${MKHTML_DATA_PATH}" | sed "s/:/' '/g")'"
+
+	for _include_get_path in "${@}"; do
+		if [ -z "${_include_get_path}" ]; then
+			continue
+		fi
+
+		if [ -f "${_include_get_path}/${_include_get_filename}" ]; then
+			printf "%s\\n" "${_include_get_path}/${_include_get_filename}"
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+html()
+{
+	_html_out="${1}"
+	_html_fmt="${2}"
+	shift 2
+
+	# shellcheck disable=SC2059
+	printf "${_html_fmt}\\n" "${@}" >>"${_html_out}"
+}
+
+html_meta()
+{
+	html "${1}" "<meta name=\"%s\" content=\"%s\">" "${2}" "${3}"
+}
+
+html_meta_opt()
+{
+	if [ -n "${3}" ]; then
+		html_meta "${1}" "${2}" "${3}"
+	fi
+}
+
+html_include()
+{
+	if _html_include_path="$(include_get "${2}.html")"; then
+		cat "${_html_include_path}" >>"${1}"
+	elif _html_include_path="$(include_get "${2}")" \
+	&& [ -d "${_html_include_path}" ] \
+	&& ( set -- "${_html_include_path}"/*.html && [ -f "${1}" ]; ); then
+		cat "${_html_include_path}"/*.html >>"${1}"
+	else
+		return 1
+	fi
+}
+
+html_include_opt()
+{
+	checkyn "${2}"
+	_html_include_opt_chk="${?}"
+	_html_include_opt_basename=""
+
+	if [ -z "${2}" ] || [ "${_html_include_opt_chk}" -eq 0 ]; then
+		_html_include_opt_basename="${3}"
+	elif [ "${_html_include_opt_chk}" -eq 2 ]; then
+		_html_include_opt_basename="${3}-${2}"
+	else
+		return 0
+	fi
+
+	if ! html_include "${1}" "${_html_include_opt_basename}"; then
+		if [ -z "${2}" ]; then
+			if [ "${3}" = "head" ]; then
+				printf "warning: %s\\n" \
+					"creating a head.html is recommended" \
+					>&2
+			fi
+
+			return 0
+		else
+			error "unable to locate include file: %s" \
+				"${_html_include_opt_basename}"
+		fi
+	fi
+}
+
+format="asciidoc"
+output=""
+
+asciidoctor_flags=""
+mistletoe_flags=""
+processor_backend="html5"
+
+while getopts ":I:S:Ta:b:d:f:hno:qr:tvw" opt; do
+	case "${opt}" in
+	[ISa])
+		asciidoctor_flags="${asciidoctor_flags# } -${opt} $(shquote "${OPTARG}")"
+		;;
+	[nqvtw])
+		asciidoctor_flags="${asciidoctor_flags# } -${opt}"
+		;;
+	T)
+		asciidoctor_flags="${asciidoctor_flags# } --trace"
+		;;
+	r)
+		asciidoctor_flags="${asciidoctor_flags# } -${opt} $(shquote "${OPTARG}")"
+		mistletoe_flags="${mistletoe_flags# } -${opt} $(shquote "${OPTARG}")"
+		;;
+	b)
+		processor_backend="${OPTARG}"
+		;;
+	d)
+		if [ -n "${OPTARG}" ]; then
+			MKHTML_DATA_PATH="${OPTARG}:${MKHTML_DATA_PATH%:}"
+		fi
+		;;
+	f)
+		case "${OPTARG}" in
+		asciidoc|markdown)
+			format="${OPTARG}"
+			;;
+		*)
+			fatal "unknown document format"
+			;;
+		esac
+		;;
+	h)
+		printf "%s" "${mkhtml_help}"
+		exit 0
+		;;
+	o)
+		output="${OPTARG}"
+		;;
+	:)
+		fatal "option requires argument: -%s" "${OPTARG}"
+		;;
+	*)
+		fatal "invalid option: -%s" "${OPTARG}"
+		;;
+	esac
+done
+shift "$((OPTIND - 1))"
+
+if [ -z "${1}" ] || [ "${#}" -gt 1 ]; then
+	fatal "expected arguments: <source>"
+elif [ ! -f "${1}" ]; then
+	fatal "source file does not exist: %s" "${1}"
+fi
+
+tmpf_body="$(mktemp -p "${MKHTML_TMPDIR}")"
+tmpf_head="$(mktemp -p "${MKHTML_TMPDIR}")"
+tmpf_tail="$(mktemp -p "${MKHTML_TMPDIR}")"
+
+# The processor can take a while to run. Since this is independent of the head
+# and tail generation, shove it into the background and wait for it later.
+exec_processor "${1}" "${tmpf_body}"
+processor_pid="${!}"
+
+title="$(attr_get "title" "${1}")"
+footer="$(attr_get "footer" "${1}")"
+head="$(attr_get "head" "${1}")"
+header="$(attr_get "header" "${1}")"
+lang="$(attr_get "lang" "${1}")"
+
+# Assign a language attribute if we were given one.
+html "${tmpf_head}" "%s" "<!DOCTYPE html>" "<html${lang:+" lang=\"${lang}\""}>"
+
+# Set up a clean HTML5 document <head>.
+html "${tmpf_head}" "%s" "<head>"
+
+# Further <head> content is _strongly_ recommended, but is not required.
+html_include_opt "${tmpf_head}" "${head}" "head"
+html "${tmpf_head}" "%s" "<title>${title}</title>"
+
+html "${tmpf_head}" "%s" "</head>"
+html "${tmpf_head}" "%s" "<body>"
+
+# Optionally include a <header> element by name.
+html_include_opt "${tmpf_head}" "${header}" "header"
+
+# Wrap the "real" document content in <article> tags.
+html "${tmpf_head}" "<article>"
+html "${tmpf_tail}" "</article>"
+
+# Optionally include a <footer> element by name.
+html_include_opt "${tmpf_tail}" "${footer}" "footer"
+html "${tmpf_tail}" "%s" "</body>" "</html>"
+
+# If the processor failed, we don't want to create an output file.
+if ! wait "${processor_pid}"; then
+	fatal "failed to process document"
+fi
+
+if [ -z "${output}" ] || [ "${output}" = "-" ]; then
+	cat "${tmpf_head}" "${tmpf_body}" "${tmpf_tail}"
+else
+	cat "${tmpf_head}" "${tmpf_body}" "${tmpf_tail}" >"${output}"
+fi

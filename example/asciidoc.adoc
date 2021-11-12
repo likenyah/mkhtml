@@ -1,0 +1,4 @@
+= Asciidoc
+:lang: en
+
+This is a document written in Asciidoc and processed with Asciidoctor.
